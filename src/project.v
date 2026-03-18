@@ -6,9 +6,8 @@
  *
  * Implements the Spongent-88/80/8 sponge construction as a byte-serial
  * hardware accelerator.  The host XORs message bytes into the rate and
- * triggers the permutation one byte at a time; after all bytes (including
- * any padding) have been absorbed the host issues a squeeze command to
- * latch the 88-bit digest and then reads it back one byte at a time.
+ * triggers the permutation one byte at a time; after all bytes have been
+ * absorbed the host issues a squeeze or hash command.
  *
  * I/O pin assignment
  * ------------------
@@ -16,7 +15,9 @@
  *  uo_out[7:0]  current digest byte (LSB-first; advances on rd_rise/addr=2)
  *
  *  uio_in[2:0]  register address
- *                 0 = CMD    write 0→reset sponge  write 1→squeeze
+ *                 0 = CMD    write 0→reset sponge
+ *                            write 1→squeeze (manual: latch current state)
+ *                            write 2→hash    (absorb pad byte 0x81, then auto-squeeze)
  *                 1 = ABSORB write ui_in byte into rate[7:0], run permutation
  *                 2 = RD_ADV read-strobe: advance output shift-register by 1 byte
  *  uio_in[3]    write strobe  (rising-edge triggered)
@@ -24,24 +25,35 @@
  *  uio_in[7:5]  unused
  *
  *  uio_out[0]   busy      — 1 while permutation is running
- *  uio_out[1]   out_valid — 1 after squeeze, until next reset
+ *  uio_out[1]   out_valid — 1 after squeeze/hash, until next reset
  *  uio_out[7:2] driven 0
  *
- * Typical host sequence
- * ---------------------
+ * Typical host sequence (manual padding)
+ * ---------------------------------------
  *  1. wr addr=0, data=0          → reset sponge state
  *  2. for each message byte b:
- *       wr addr=1, data=b        → absorb (XOR + permute, 45 cycles)
+ *       wr addr=1, data=b        → absorb (XOR + permute, 23 cycles)
  *       poll uio_out[0] until 0  → wait for busy to clear
- *  3. (host appends padding bytes the same way, per sponge spec)
- *  4. wr addr=0, data=1          → squeeze: latch 88-bit digest
- *  5. read uo_out                → byte 0 of digest (state[7:0])
+ *  3. wr addr=0, data=1          → squeeze: latch 88-bit digest
+ *  4. read uo_out                → byte 0 of digest (state[7:0])
  *     wr addr=2, data=x          → advance to byte 1
- *     read uo_out                → byte 1 of digest (state[15:8])
  *     ... repeat 9 more times for bytes 2–10
  *
+ * Typical host sequence (hardware padding via CMD=2)
+ * ---------------------------------------------------
+ *  1. wr addr=0, data=0          → reset sponge state
+ *  2. for each message byte b:
+ *       wr addr=1, data=b        → absorb
+ *       poll uio_out[0] until 0  → wait for busy
+ *  3. wr addr=0, data=2          → hash: absorbs pad byte 0x81 then auto-squeezes
+ *     poll uio_out[0] until 0    → wait for busy
+ *  4. read uo_out / advance as above
+ *
+ * Padding rule (pad10*1, rate = 8 bits = 1 byte):
+ *   Append 0x81 (bit 0 = first pad bit, bit 7 = last pad bit).
+ *
  * Timing (50 MHz clock)
- *   One absorb = 1 (load) + 45 (permutation) + 1 (capture) = 47 cycles ≈ 940 ns
+ *   One absorb = 1 (load) + 23 (permutation rounds) + 1 (capture) = 25 cycles ≈ 500 ns
  */
 
 `default_nettype none
@@ -103,10 +115,11 @@ module tt_um_spongent88 (
     // ------------------------------------------------------------------
     // Sponge state and output buffer
     // ------------------------------------------------------------------
-    reg [87:0] sponge;     // current sponge state (all-zero after reset)
-    reg [87:0] out_shreg;  // digest shift register loaded at squeeze time
-    reg        out_valid;  // set by squeeze, cleared by reset
-    reg        busy;       // reflects ongoing permutation
+    reg [87:0] sponge;        // current sponge state (all-zero after reset)
+    reg [87:0] out_shreg;     // digest shift register loaded at squeeze time
+    reg        out_valid;     // set by squeeze/hash, cleared by reset
+    reg        busy;          // reflects ongoing permutation
+    reg        auto_squeeze;  // when set, latch digest automatically when permutation ends
 
     // perm_active: prevents spurious early exit from ST_PERM.
     // core_busy goes high one cycle after core_start; this flag ensures we
@@ -122,14 +135,15 @@ module tt_um_spongent88 (
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sponge      <= 88'b0;
-            out_shreg   <= 88'b0;
-            out_valid   <= 1'b0;
-            busy        <= 1'b0;
-            perm_active <= 1'b0;
-            core_start  <= 1'b0;
-            core_in     <= 88'b0;
-            fsm         <= ST_IDLE;
+            sponge       <= 88'b0;
+            out_shreg    <= 88'b0;
+            out_valid    <= 1'b0;
+            busy         <= 1'b0;
+            auto_squeeze <= 1'b0;
+            perm_active  <= 1'b0;
+            core_start   <= 1'b0;
+            core_in      <= 88'b0;
+            fsm          <= ST_IDLE;
 
         end else begin
             core_start <= 1'b0;  // default: no start pulse this cycle
@@ -151,6 +165,14 @@ module tt_um_spongent88 (
                                         out_shreg <= sponge;
                                         out_valid <= 1'b1;
                                     end
+                                    2'd2: begin  // hash: absorb pad byte 0x81 + auto-squeeze
+                                        core_in      <= sponge ^ {80'b0, 8'h81};
+                                        core_start   <= 1'b1;
+                                        busy         <= 1'b1;
+                                        auto_squeeze <= 1'b1;
+                                        perm_active  <= 1'b0;
+                                        fsm          <= ST_PERM;
+                                    end
                                     default: ;
                                 endcase
                             end
@@ -171,7 +193,7 @@ module tt_um_spongent88 (
 
                 ST_PERM: begin
                     // Phase 1: wait for core_busy to go high (one cycle after start)
-                    // Phase 2: wait for core_busy to fall (45 rounds later)
+                    // Phase 2: wait for core_busy to fall (23 rounds later)
                     if (!perm_active) begin
                         if (core_busy)
                             perm_active <= 1'b1;
@@ -180,6 +202,11 @@ module tt_um_spongent88 (
                         busy        <= 1'b0;
                         perm_active <= 1'b0;
                         fsm         <= ST_IDLE;
+                        if (auto_squeeze) begin
+                            out_shreg    <= core_out;
+                            out_valid    <= 1'b1;
+                            auto_squeeze <= 1'b0;
+                        end
                     end
                 end
 

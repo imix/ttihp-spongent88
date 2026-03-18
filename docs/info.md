@@ -17,8 +17,9 @@ Each round applies 22 parallel 4-bit S-box lookups, a zero-gate bit permutation
 `P(i) = (i × 22) mod 87`, and XORs a 6-bit LFSR counter into both ends of the state
 (forward into bits [5:0], bit-reversed into bits [87:82]).
 
-The permutation is implemented **round-serial**: one full round per clock cycle, giving
-a latency of exactly **45 cycles per hash call**.
+The permutation is implemented with **2-round unrolling**: two full rounds per clock cycle
+(22 double-round cycles + 1 single-round cycle for round 44), giving a latency of exactly
+**23 cycles per permutation call**.
 
 ### Sponge construction
 
@@ -32,8 +33,9 @@ byte-aligned message this collapses to `0x81`).
 
 W-OTS with Winternitz parameter `w=16` uses 25 hash chains of depth up to 15.
 Each chain step is one Spongent-88 call.  The chip accelerates all 25 × 15 = 375
-permutations needed to sign a message; at 50 MHz this takes approximately **350 µs**
-per signature.  Key management and protocol logic run in software on the host (RP2040).
+permutations needed to sign a message; at 50 MHz this takes approximately **190 µs**
+per signature (25 cycles × 375 calls at 50 MHz).  Key management and protocol logic
+run in software on the host (RP2040).
 
 ### Register interface
 
@@ -56,11 +58,12 @@ TinyTapeout bidirectional pins:
 |---|---|---|
 | 0 | write `0` | Reset: zero the sponge state, clear `out_valid` |
 | 0 | write `1` | Squeeze: latch 88-bit digest into output shift register |
+| 0 | write `2` | Hash: absorb pad byte `0x81` then auto-squeeze (no manual padding needed) |
 | 1 | write `b` | Absorb: XOR byte `b` into `state[7:0]`, run 45-round permutation |
 | 2 | read strobe | Advance output shift register to next digest byte |
 
-**Timing:** one absorb call takes **47 clock cycles** (1 load + 45 permutation + 1 capture).
-The host must poll `busy` (or wait 47 cycles) before issuing the next command.
+**Timing:** one absorb call takes **25 clock cycles** (1 load + 23 permutation rounds + 1 capture).
+The host must poll `busy` before issuing the next command.
 
 ## How to test
 
@@ -104,14 +107,23 @@ def squeeze():
             time.sleep_us(1)
     return bytes(result)
 
-# Hash b'\xAB\xCD\xEF'
+# Hash b'\xAB\xCD\xEF' using hardware padding (CMD=2)
 write_reg(0, 0)          # reset
 absorb(0xAB)
 absorb(0xCD)
 absorb(0xEF)
-absorb(0x81)             # padding byte (pad10*1)
-digest = squeeze()       # returns 11 bytes, LSB first
-print(digest.hex())
+write_reg(0, 2)          # hash: absorbs 0x81 pad byte and auto-squeezes
+while read_busy():       # wait for pad permutation
+    pass
+digest = []
+for i in range(11):
+    digest.append(read_uo_out())
+    if i < 10:
+        set_uio_high(2 | 0x10)  # advance output
+        time.sleep_us(1)
+        set_uio_low(0)
+        time.sleep_us(1)
+print(bytes(digest).hex())
 ```
 
 ### Using the cocotb simulation
@@ -123,17 +135,21 @@ make          # RTL simulation (iverilog + cocotb)
 make WAVES=1  # also dump FST waveform (open with GTKWave or Surfer)
 ```
 
-Seven test cases run automatically:
+Nine test cases run automatically:
 
 1. **`test_single_byte_absorb`** — absorbs 6 different single bytes, verifies digest
 2. **`test_multi_byte_absorb`** — multi-byte sequences up to 11 bytes
-3. **`test_absorb_timing`** — asserts exactly 47 cycles per absorb
+3. **`test_absorb_timing`** — asserts exactly 25 cycles per absorb
 4. **`test_out_valid_flag`** — checks `out_valid` transitions
 5. **`test_reset_clears_state`** — same input after reset gives same digest
 6. **`test_absorb_while_busy_ignored`** — writes during busy are silently dropped
 7. **`test_reference_kat_components`** — validates Python model against published
    reference vectors (`sBoxLayer` and `pLayer` KATs, full LFSR sequence), then
    confirms DUT matches the validated model
+8. **`test_vs_readable_crypto_reference`** — cross-checks against the independent
+   joostrijneveld/readable-crypto implementation
+9. **`test_hash_command`** — verifies CMD=2 applies pad `0x81` and auto-squeezes,
+   matching `hash88()` from the reference model
 
 **Run the Python reference model standalone** (no simulator needed):
 

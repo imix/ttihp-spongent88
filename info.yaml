@@ -8,7 +8,7 @@ project:
   clock_hz:     50000000  # 50 MHz
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
-  tiles: "1x2"           # Spongent-88 core ~750 GE + control ~250 GE; 1x2 gives comfortable margin
+  tiles: "2x2"           # 2-round-unrolled core ~1800 GE + control ~300 GE; 2x2 gives comfortable margin
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_spongent88"

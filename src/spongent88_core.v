@@ -2,7 +2,7 @@
  * Copyright (c) 2024 Your Name
  * SPDX-License-Identifier: Apache-2.0
  *
- * spongent88_core.v — Spongent-88/80/8 permutation
+ * spongent88_core.v — Spongent-88/80/8 permutation (2-rounds-per-cycle)
  *
  * Spongent-88/80/8 parameters (CHES 2011):
  *   State b  = 88 bits
@@ -22,8 +22,10 @@
  *   next = {lfsr[4:0], lfsr[5] ^ lfsr[4]}
  *   Sequence: 0x05, 0x0A, 0x14, 0x29, 0x13, 0x27, 0x0F, ...  (period 63)
  *
- * Timing (round-serial, one round per clock cycle):
- *   Latency = 45 cycles.  busy falls on the same edge the final state is
+ * Timing (2-rounds-per-cycle):
+ *   45 rounds are computed as 22 double-round cycles (rounds 0-1 .. 42-43)
+ *   plus 1 single-round cycle (round 44).
+ *   Latency = 23 cycles.  busy falls on the same edge the final state is
  *   written, so state_out is valid combinationally after that edge.
  *
  * Interface:
@@ -104,31 +106,29 @@ module spongent88_core (
     // ----------------------------------------------------------------
     reg [87:0] state;
     reg [5:0]  lfsr;   // 6-bit round counter; poly x^6+x^5+1, init 0x05
-    reg [5:0]  round;  // 0..44
+    reg [5:0]  round;  // next round index to apply: 0, 2, 4, ..., 42, 44
 
     assign state_out = state;
 
     // ----------------------------------------------------------------
-    // Combinational round function — order from Spongent.cpp Permute():
-    //   counter injection → sBoxLayer → pLayer
+    // Round 1 — uses current lfsr (applies round `round`)
     // ----------------------------------------------------------------
+    wire [5:0]  lfsr_rev1  = {lfsr[0], lfsr[1], lfsr[2], lfsr[3], lfsr[4], lfsr[5]};
+    wire [87:0] r_count1   = state ^ {lfsr_rev1, 76'b0, lfsr};
+    wire [87:0] r_sbox1    = sbox_layer(r_count1);
+    wire [87:0] r_round1   = player(r_sbox1);
+    wire [5:0]  lfsr_next1 = {lfsr[4:0], lfsr[5] ^ lfsr[4]};
 
-    // Step 1 — counter injection
-    //   state[5:0]   ^= lfsr
-    //   state[87:82] ^= bit_reverse_6(lfsr)
-    //   state[81:6]  unchanged
-    //   Layout: {6-bit lfsr_rev | 76-bit zero | 6-bit lfsr} = 88 bits
-    wire [5:0]  lfsr_rev = {lfsr[0], lfsr[1], lfsr[2], lfsr[3], lfsr[4], lfsr[5]};
-    wire [87:0] r_count  = state ^ {lfsr_rev, 76'b0, lfsr};
-
-    // Step 2 — S-box layer
-    wire [87:0] r_sbox   = sbox_layer(r_count);
-
-    // Step 3 — pLayer (pure wiring, zero gates)
-    wire [87:0] r_round  = player(r_sbox);
-
-    // LFSR step: left-shift, feedback = bit5 XOR bit4 (poly x^6+x^5+1)
-    wire [5:0]  lfsr_next = {lfsr[4:0], lfsr[5] ^ lfsr[4]};
+    // ----------------------------------------------------------------
+    // Round 2 — uses lfsr after one step (applies round `round + 1`)
+    // Only used when round < 44 (i.e., we have a pair to process).
+    // ----------------------------------------------------------------
+    wire [5:0]  lfsr2      = lfsr_next1;
+    wire [5:0]  lfsr_rev2  = {lfsr2[0], lfsr2[1], lfsr2[2], lfsr2[3], lfsr2[4], lfsr2[5]};
+    wire [87:0] r_count2   = r_round1 ^ {lfsr_rev2, 76'b0, lfsr2};
+    wire [87:0] r_sbox2    = sbox_layer(r_count2);
+    wire [87:0] r_round2   = player(r_sbox2);
+    wire [5:0]  lfsr_next2 = {lfsr2[4:0], lfsr2[5] ^ lfsr2[4]};
 
     // ----------------------------------------------------------------
     // Control FSM
@@ -148,15 +148,17 @@ module spongent88_core (
             busy  <= 1'b1;
 
         end else if (busy) begin
-            // Apply one round per clock cycle
-            state <= r_round;
-            lfsr  <= lfsr_next;
             if (round == 6'd44) begin
-                // Round 44 is the last (rounds 0..44 = 45 total)
+                // Last round: apply single round 44, then done
+                state <= r_round1;
+                lfsr  <= lfsr_next1;
                 busy  <= 1'b0;
                 round <= 6'd0;
             end else begin
-                round <= round + 1'b1;
+                // Double round: apply rounds `round` and `round+1` in one cycle
+                state <= r_round2;
+                lfsr  <= lfsr_next2;
+                round <= round + 6'd2;
             end
         end
     end

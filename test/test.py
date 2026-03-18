@@ -35,7 +35,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge
 
 from spongent88_ref import (
-    Spongent88, permute, sbox_layer, player,
+    Spongent88, permute, sbox_layer, player, hash88,
     _REF_SBOX_IN, _REF_SBOX_OUT,
     _REF_PLAYER_IN, _REF_PLAYER_OUT,
     _REFERENCE_LFSR_SEQ, lfsr_sequence,
@@ -46,7 +46,7 @@ from spongent88_readable_crypto import SPONGENT as _RefSPONGENT
 # Constants
 # ---------------------------------------------------------------------------
 CLOCK_PERIOD_NS = 20   # 50 MHz
-ABSORB_CYCLES   = 47   # expected cycles per absorb (see project.v timing notes)
+ABSORB_CYCLES   = 25   # expected cycles per absorb: 1 (load) + 23 (rounds) + 1 (capture)
 
 # uio_in bit positions
 WR_EN = 0x08   # bit 3
@@ -129,7 +129,7 @@ async def _absorb_byte(dut, byte: int):
     while dut.uio_out.value.integer & 0x1:   # poll busy (bit 0)
         await RisingEdge(dut.clk)
         cycles += 1
-        assert cycles <= 100, f"busy stuck high after absorbing {byte:#04x}"
+        assert cycles <= 50, f"busy stuck high after absorbing {byte:#04x}"
     return cycles
 
 
@@ -530,3 +530,60 @@ async def test_vs_readable_crypto_reference(dut):
     dut._log.info("Sponge absorb vs readable-crypto  OK")
 
     dut._log.info("All readable-crypto cross-checks passed")
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — CMD=2 hardware padding (hash command)
+#
+# CMD=2 absorbs the pad byte 0x81 and auto-squeezes in one command, so
+# the result must match hash88() from the reference model (which appends
+# 0x81 then squeezes manually).
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_hash_command(dut):
+    """CMD=2 must absorb pad 0x81 and auto-squeeze, matching hash88()."""
+    _start_clock(dut)
+    await _hw_reset(dut)
+
+    messages = [b'', b'\x00', b'\xA5', b'abc', b'\xDE\xAD\xBE\xEF']
+
+    for msg in messages:
+        dut._log.info(f"Testing hash command for {msg.hex() or '(empty)'}")
+
+        await _sponge_reset(dut)
+
+        # Absorb message bytes manually
+        for b in msg:
+            await _absorb_byte(dut, b)
+
+        # CMD=2: hardware pad + auto-squeeze
+        await _write_reg(dut, 0, 2)
+
+        # Wait for busy to clear (padding permutation in progress)
+        cycles = 0
+        while dut.uio_out.value.integer & 0x1:
+            await RisingEdge(dut.clk)
+            cycles += 1
+            assert cycles <= 50, "busy stuck high during hash command"
+
+        # out_valid must be set
+        assert dut.uio_out.value.integer & 0x2, \
+            "out_valid not set after CMD=2"
+
+        # Read digest
+        dut_digest = []
+        for i in range(11):
+            dut_digest.append(dut.uo_out.value.integer)
+            if i < 10:
+                await _advance_output(dut)
+        dut_digest = bytes(dut_digest)
+
+        # Reference
+        ref_digest = hash88(msg)
+
+        assert dut_digest == ref_digest, (
+            f"Hash command mismatch for {msg.hex() or '(empty)'}:\n"
+            f"  DUT: {dut_digest.hex()}\n"
+            f"  REF: {ref_digest.hex()}"
+        )
+        dut._log.info(f"  digest = {dut_digest.hex()}  OK")
