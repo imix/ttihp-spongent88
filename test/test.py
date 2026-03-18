@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tiny Tapeout
 # SPDX-License-Identifier: Apache-2.0
 """
-Cocotb tests for tt_um_winternitz_ots (Spongent-88 hash accelerator)
+Cocotb tests for tt_um_spongent88 (Spongent-88 hash accelerator)
 
 The golden reference for all digest comparisons is spongent88_ref.py.
 That Python model must be independently verified against the official

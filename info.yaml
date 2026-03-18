@@ -1,9 +1,9 @@
 # Tiny Tapeout project information
 project:
-  title:        "Spongent-88 Hash Accelerator (W-OTS primitive)"
-  author:       ""      # Your name
+  title:        "Spongent-88 Hash Accelerator"
+  author:       "Stefan Aeschbacher"
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Hardware accelerator for the Spongent-88/80/8 lightweight hash function, designed as the cryptographic primitive for post-quantum Winternitz one-time signatures (W-OTS)."
+  description:  "Hardware accelerator for the Spongent-88/80/8 lightweight hash function."
   language:     "Verilog"
   clock_hz:     50000000  # 50 MHz
 
@@ -11,7 +11,7 @@ project:
   tiles: "1x2"           # Spongent-88 core ~750 GE + control ~250 GE; 1x2 gives comfortable margin
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
-  top_module:  "tt_um_winternitz_ots"
+  top_module:  "tt_um_spongent88"
 
   # List your project's source files here.
   # Source files must be in ./src and you must list each source file separately, one per line.
