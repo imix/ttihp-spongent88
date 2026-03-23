@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Your Name
+ * Copyright (c) 2026 Stefan Aeschbacher
  * SPDX-License-Identifier: Apache-2.0
  *
  * Spongent-88 hash accelerator — TinyTapeout top module

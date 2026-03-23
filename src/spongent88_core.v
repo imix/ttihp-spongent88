@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Your Name
+ * Copyright (c) 2026 Stefan Aeschbacher
  * SPDX-License-Identifier: Apache-2.0
  *
  * spongent88_core.v — Spongent-88/80/8 permutation (2-rounds-per-cycle)

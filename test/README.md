@@ -1,47 +1,46 @@
-# Sample testbench for a Tiny Tapeout project
+# Spongent-88 Verification Suite
 
-This is a sample testbench for a Tiny Tapeout project. It uses [cocotb](https://docs.cocotb.org/en/stable/) to drive the DUT and check the outputs.
-See below to get started or for more information, check the [website](https://tinytapeout.com/hdl/testing/).
+This directory contains the verification suite for the Spongent-88/80/8 hash accelerator. It uses [cocotb](https://docs.cocotb.org/en/stable/) and [Icarus Verilog](http://iverilog.icarus.com/) to perform cycle-accurate RTL and Gate-Level simulations.
 
-## Setting up
+## 📁 Files
 
-1. Edit [Makefile](Makefile) and modify `PROJECT_SOURCES` to point to your Verilog files.
-2. Edit [tb.v](tb.v) and replace `tt_um_example` with your module name.
+*   **`test.py`**: The main cocotb test suite (9 test cases).
+*   **`spongent88_ref.py`**: A pure Python golden-reference model of the Spongent-88 algorithm.
+*   **`spongent88_readable_crypto.py`**: An independent reference implementation (joostrijneveld/readable-crypto) used for cross-checking the golden model.
+*   **`tb.v`**: The Verilog testbench wrapper that instantiates the TinyTapeout module.
 
-## How to run
+## 🚀 How to Run
 
-To run the RTL simulation:
-
-```sh
-make -B
+### RTL Simulation
+To run the standard RTL simulation and verify the logic:
+```bash
+make
 ```
 
-To run gatelevel simulation, first harden your project and copy `../runs/wokwi/results/final/verilog/gl/{your_module_name}.v` to `gate_level_netlist.v`.
-
-Then run:
-
-```sh
-make -B GATES=yes
-```
-
-If you wish to save the waveform in VCD format instead of FST format, edit tb.v to use `$dumpfile("tb.vcd");` and then run:
-
-```sh
-make -B FST=
-```
-
-This will generate `tb.vcd` instead of `tb.fst`.
-
-## How to view the waveform file
-
-Using GTKWave
-
-```sh
+### Waveform Analysis
+To generate a waveform dump (`tb.fst`) for analysis in GTKWave or Surfer:
+```bash
+make WAVES=1
 gtkwave tb.fst tb.gtkw
 ```
 
-Using Surfer
-
-```sh
-surfer tb.fst
+### Gate-Level Simulation (GLS)
+After hardening the design with OpenLane/LibreLane, you can verify the synthesized netlist:
+```bash
+make GATES=yes
 ```
+
+## 🔍 Test Cases
+The suite performs the following checks:
+1.  **Single-byte Absorb**: Verifies hashing of standard 8-bit inputs.
+2.  **Multi-byte Sequences**: Tests the sponge "absorbing" phase with variable-length messages.
+3.  **Cycle-Accurate Timing**: Asserts exactly 25 cycles per absorb (1 load + 23 permutation + 1 capture).
+4.  **Hardware Flags**: Verifies `busy` and `out_valid` signal transitions.
+5.  **Reset Persistence**: Confirms that a hardware/software reset clears the internal state.
+6.  **Collision Prevention**: Ensures that writes during a busy state are ignored.
+7.  **KAT Validation**: Directly compares intermediate layers (S-Box, pLayer, LFSR) against published Known-Answer Tests.
+8.  **Reference Cross-Check**: Validates the internal Python model against the `readable-crypto` implementation.
+9.  **Hardware Padding**: Verifies that `CMD=2` correctly applies the `0x81` pad and auto-squeezes.
+
+---
+*Maintained by Stefan Aeschbacher.*

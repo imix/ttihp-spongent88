@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
+# SPDX-FileCopyrightText: © 2024 Tiny Tapeout, © 2026 Stefan Aeschbacher
 # SPDX-License-Identifier: Apache-2.0
 """
 Cocotb tests for tt_um_spongent88 (Spongent-88 hash accelerator)

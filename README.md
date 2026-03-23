@@ -1,42 +1,85 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+# Spongent-88: Lightweight Post-Quantum Hash Accelerator
 
-# Tiny Tapeout Spongent-88
+[![test](https://github.com/stefan-aeschbacher/ttihp-spongent88/actions/workflows/test.yaml/badge.svg)](https://github.com/stefan-aeschbacher/ttihp-spongent88/actions/workflows/test.yaml)
+[![GDS](https://github.com/stefan-aeschbacher/ttihp-spongent88/actions/workflows/gds.yaml/badge.svg)](https://github.com/stefan-aeschbacher/ttihp-spongent88/actions/workflows/gds.yaml)
 
-- [Read the documentation for project](docs/info.md)
+A high-performance, gate-efficient silicon implementation of the **Spongent-88/80/8** hash function, designed for the **Tiny Tapeout IHP shuttle**. This chip serves as the cryptographic engine for **Winternitz One-Time Signatures (W-OTS)** — a post-quantum secure signature scheme.
 
-## What is Tiny Tapeout?
+## 🚀 Key Features
 
-Tiny Tapeout is an educational project that aims to make it easier and cheaper than ever to get your digital and analog designs manufactured on a real chip.
+*   **2-Round Unrolling:** Computes two permutation rounds per clock cycle, delivering a full 45-round hash in just **23 cycles** (~460ns @ 50MHz).
+*   **Post-Quantum Ready:** Optimized as a primitive for W-OTS chain iterations.
+*   **Zero-Gate Diffusion:** Leverages hard-wired bit permutations (`pLayer`) for instantaneous, zero-power diffusion.
+*   **Sponge Architecture:** Implements a flexible 88-bit state with an 8-bit rate for byte-serial stream processing.
+*   **Verified Silicon:** 100% pass rate across cycle-accurate Python reference models and independent cryptographic test vectors.
 
-To learn more and get started, visit https://tinytapeout.com.
+## 🛠 Architecture
 
-## Set up your Verilog project
+The core uses a **Substitution-Permutation Network (SPN)** architecture:
 
-1. Add your Verilog files to the `src` folder.
-2. Edit the [info.yaml](info.yaml) and update information about your project, paying special attention to the `source_files` and `top_module` properties. If you are upgrading an existing Tiny Tapeout project, check out our [online info.yaml migration tool](https://tinytapeout.github.io/tt-yaml-upgrade-tool/).
-3. Edit [docs/info.md](docs/info.md) and add a description of your project.
-4. Adapt the testbench to your design. See [test/README.md](test/README.md) for more information.
+1.  **Counter Injection:** 6-bit LFSR round constants break symmetry and prevent slide attacks.
+2.  **S-Box Layer:** 22 parallel 4-bit Spongent S-boxes provide non-linear confusion.
+3.  **pLayer:** A $P(j) = (j \times 22) \pmod{87}$ bit-shuffle provides global diffusion across the 88-bit state.
 
-The GitHub action will automatically build the ASIC files using [LibreLane](https://www.zerotoasiccourse.com/terminology/librelane/).
+```mermaid
+graph TD
+    A[Host / RP2040] -- "ui_in (8-bit)" --> B[Sponge State]
+    B -- "XOR Rate" --> C[Permutation Engine]
+    subgraph "Spongent Core (2-Round Unrolled)"
+    C --> D[S-Box Layer x22]
+    D --> E[pLayer Shuffle]
+    E --> F[Round 2 Logic]
+    end
+    F --> B
+    B -- "uo_out" --> A
+```
 
-## Enable GitHub actions to build the results page
+## 📊 Performance at 50 MHz
 
-- [Enabling GitHub Pages](https://tinytapeout.com/faq/#my-github-action-is-failing-on-the-pages-part)
+| Metric | Value |
+| :--- | :--- |
+| **Clock Frequency** | 50 MHz |
+| **Permutation Latency** | 23 Cycles (460 ns) |
+| **Absorption Throughput** | 2.0 MB/s (1 byte / 25 cycles) |
+| **W-OTS Signature (375 hashes)** | ~190 µs |
 
-## Resources
+## 🕹 Interface
 
-- [FAQ](https://tinytapeout.com/faq/)
-- [Digital design lessons](https://tinytapeout.com/digital_design/)
-- [Learn how semiconductors work](https://tinytapeout.com/siliwiz/)
-- [Join the community](https://tinytapeout.com/discord)
-- [Build your design locally](https://www.tinytapeout.com/guides/local-hardening/)
+The chip is controlled via a simple 3-wire register interface (Address, Write-Strobe, Read-Strobe).
 
-## What next?
+| Addr | Register | Command |
+| :--- | :--- | :--- |
+| **0** | **CMD** | `0` = Reset, `1` = Squeeze, `2` = Hash (Auto-Pad) |
+| **1** | **ABSORB** | XORs byte into state and triggers 45-round permutation |
+| **2** | **RD_ADV** | Advances the output shift register to the next digest byte |
 
-- [Submit your design to the next shuttle](https://app.tinytapeout.com/).
-- Edit [this README](README.md) and explain your design, how it works, and how to test it.
-- Share your project on your social network of choice:
-  - LinkedIn [#tinytapeout](https://www.linkedin.com/search/results/content/?keywords=%23tinytapeout) [@TinyTapeout](https://www.linkedin.com/company/100708654/)
-  - Mastodon [#tinytapeout](https://chaos.social/tags/tinytapeout) [@matthewvenn](https://chaos.social/@matthewvenn)
-  - X (formerly Twitter) [#tinytapeout](https://twitter.com/hashtag/tinytapeout) [@tinytapeout](https://twitter.com/tinytapeout)
-  - Bluesky [@tinytapeout.com](https://bsky.app/profile/tinytapeout.com)
+## 🧪 Verification
+
+The project includes a comprehensive test suite:
+*   **`spongent88_ref.py`**: A pure Python implementation used for golden-model verification.
+*   **Cocotb Testbench**: Automates RTL simulation vs. reference models.
+*   **KAT Validation**: Verified against official Spongent-88 intermediate vectors (`sBoxLayer` and `pLayer` KATs).
+
+To run the simulation locally:
+```bash
+cd test
+make
+```
+
+## 📖 Documentation
+Detailed signal timing, register maps, and integration guides are available in [docs/info.md](docs/info.md).
+
+## 📄 License
+
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🏗 Project Context
+
+This project was developed for the **Tiny Tapeout IHP Shuttle** (March 2026). 
+
+*   **Tiny Tapeout** is an educational project that makes it easier and cheaper than ever to get digital and analog designs manufactured on a real chip. Learn more at [tinytapeout.com](https://tinytapeout.com).
+*   **Base Template:** This repository is based on the [Tiny Tapeout IHP Verilog Template](https://github.com/TinyTapeout/ttihp-verilog-template).
+
+*Developed by Stefan Aeschbacher.*
